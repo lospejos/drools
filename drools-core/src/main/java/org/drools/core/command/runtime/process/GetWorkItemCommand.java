@@ -21,12 +21,13 @@ import javax.xml.bind.annotation.XmlAccessorType;
 import javax.xml.bind.annotation.XmlAttribute;
 import javax.xml.bind.annotation.XmlRootElement;
 
-import org.drools.core.command.impl.RegistryContext;
 import org.drools.core.process.instance.WorkItem;
 import org.drools.core.process.instance.WorkItemManager;
+import org.drools.core.runtime.impl.ExecutionResultImpl;
 import org.kie.api.command.ExecutableCommand;
 import org.kie.api.runtime.Context;
 import org.kie.api.runtime.KieSession;
+import org.kie.internal.command.RegistryContext;
 
 @XmlRootElement
 @XmlAccessorType(XmlAccessType.NONE)
@@ -34,6 +35,9 @@ public class GetWorkItemCommand implements ExecutableCommand<WorkItem> {
 
     @XmlAttribute(required = true)
     private long workItemId;
+
+    @XmlAttribute(name="out-identifier")
+    private String outIdentifier;
 
     public GetWorkItemCommand() {
     }
@@ -50,9 +54,25 @@ public class GetWorkItemCommand implements ExecutableCommand<WorkItem> {
         this.workItemId = workItemId;
     }
 
+    public String getOutIdentifier() {
+        return outIdentifier;
+    }
+
+    public void setOutIdentifier(String outIdentifier) {
+        this.outIdentifier = outIdentifier;
+    }
+
     public WorkItem execute(Context context) {
         KieSession ksession = ((RegistryContext) context).lookup( KieSession.class );
-        return ((WorkItemManager) ksession.getWorkItemManager()).getWorkItem(workItemId);
+
+        final WorkItem workItem = ((WorkItemManager) ksession.getWorkItemManager()).getWorkItem(workItemId);
+
+        if ( this.outIdentifier != null ) {
+            ((RegistryContext) context).lookup( ExecutionResultImpl.class ).setResult(this.outIdentifier,
+                                                                                      workItem);
+        }
+
+        return workItem;
     }
 
     public String toString() {

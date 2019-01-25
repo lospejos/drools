@@ -119,22 +119,9 @@ public class ValidatorTest extends AbstractValidatorTest {
     }
 
     @Test
-    public void testNAME_INVALID() {
-        List<DMNMessage> validate = validator.validate( getReader( "NAME_INVALID.dmn" ), VALIDATE_SCHEMA, VALIDATE_MODEL, VALIDATE_COMPILATION);
-        assertThat( ValidatorUtil.formatMessages( validate ), validate.size(), is( 1 ) );
-        assertTrue( validate.stream().anyMatch( p -> p.getMessageType().equals( DMNMessageType.INVALID_NAME ) ) );
-    }
-
-    @Test
-    public void testNAME_INVALID_bis() {
-        /* in the file NAME_INVALID_bis.dmn there are 3 invalid "names" but only the one for the Decision node should be reported.
-         * <definitions id="NAME_INVALID" name="code in list of codes" ...
-            <decision name="code in list of codes" id="d_GreetingMessage">
-             <variable name="code in list of codes" typeRef="feel:string"/>
-         */
-        List<DMNMessage> validate = validator.validate( getReader( "NAME_INVALID_bis.dmn" ), VALIDATE_SCHEMA, VALIDATE_MODEL, VALIDATE_COMPILATION);
-        assertThat( ValidatorUtil.formatMessages( validate ), validate.size(), is( 1 ) );
-        assertTrue( validate.stream().anyMatch( p -> p.getMessageType().equals( DMNMessageType.INVALID_NAME ) ) );
+    public void testNAME_IS_VALID() {
+        List<DMNMessage> validate = validator.validate( getReader( "NAME_IS_VALID.dmn" ), VALIDATE_SCHEMA, VALIDATE_MODEL, VALIDATE_COMPILATION);
+        assertThat( ValidatorUtil.formatMessages( validate ), validate.size(), is( 0 ) );
     }
 
     @Test
@@ -330,7 +317,7 @@ public class ValidatorTest extends AbstractValidatorTest {
     public void testDMNv1_2_ch11Modified() {
         // DROOLS-2832
         List<DMNMessage> validate = validator.validate(getReader("v1_2/ch11MODIFIED.dmn", DMNRuntimeTest.class),
-                                                       // DROOLS-2893: VALIDATE_SCHEMA, 
+                                                       VALIDATE_SCHEMA, 
                                                        VALIDATE_MODEL,
                                                        VALIDATE_COMPILATION);
         assertThat(ValidatorUtil.formatMessages(validate), validate.size(), is(0));
@@ -339,9 +326,7 @@ public class ValidatorTest extends AbstractValidatorTest {
     @Test
     public void testDMNv1_2_ch11() {
         // DROOLS-2832
-        List<DMNMessage> validate = validator.validate(getReader("DMNv12_ch11.dmn"),
-                                                       // DROOLS-2893: VALIDATE_SCHEMA, 
-                                                       VALIDATE_MODEL);
+        List<DMNMessage> validate = validator.validate(getReader("DMNv12_ch11.dmn"), VALIDATE_SCHEMA, VALIDATE_MODEL);
 
         // DMN v1.2 CH11 example for Adjudication does not define decision logic nor typeRef:
         assertThat(ValidatorUtil.formatMessages(validate), validate.size(), is(2));
@@ -368,5 +353,19 @@ public class ValidatorTest extends AbstractValidatorTest {
         // DMNMessage{ severity=WARN, type=MISSING_TYPE_REF, message='Variable named 'Decision Service ABC' is missing its type reference on node 'Decision Service ABC'', sourceId='_63d05cff-8e3b-4dad-a355-fd88f8bcd613', exception='', feelEvent=''}
         assertThat(ValidatorUtil.formatMessages(validate), validate.size(), is(1));
         assertTrue(validate.stream().anyMatch(p -> p.getMessageType().equals(DMNMessageType.MISSING_TYPE_REF) && p.getSourceId().equals("_63d05cff-8e3b-4dad-a355-fd88f8bcd613")));
+    }
+
+    @Test
+    public void testDecisionService20181008() {
+        // DROOLS-3087 DMN Validation of DecisionService referencing a missing import
+        List<DMNMessage> validate = validator.validateUsing(VALIDATE_MODEL, VALIDATE_COMPILATION)
+                                             .theseModels(getReader("DSWithImport20181008-ModelA.dmn"),
+                                                          getReader("DSWithImport20181008-ModelB.dmn"));
+        assertThat(ValidatorUtil.formatMessages(validate), validate.size(), is(0));
+
+        List<DMNMessage> missingDMNImport = validator.validateUsing(VALIDATE_MODEL)
+                                                     .theseModels(getReader("DSWithImport20181008-ModelA.dmn"),
+                                                                  getReader("DSWithImport20181008-ModelB-missingDMNImport.dmn"));
+        assertThat(missingDMNImport.stream().filter(p -> p.getMessageType().equals(DMNMessageType.REQ_NOT_FOUND)).count(), is(2L)); // on Decision and Decision Service missing to locate the dependency given Import is omitted.
     }
 }

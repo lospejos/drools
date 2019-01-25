@@ -18,11 +18,12 @@ import java.util.function.Predicate;
 import org.drools.compiler.builder.impl.KnowledgeBuilderImpl;
 import org.drools.compiler.compiler.BaseKnowledgeBuilderResultImpl;
 import org.drools.compiler.lang.descr.AnnotationDescr;
+import org.drools.compiler.lang.descr.AttributeDescr;
 import org.drools.compiler.lang.descr.BaseDescr;
 import org.drools.compiler.lang.descr.PatternDescr;
 import org.drools.compiler.lang.descr.RuleDescr;
-import org.drools.core.ruleunit.RuleUnitDescr;
-import org.drools.core.ruleunit.RuleUnitRegistry;
+import org.drools.core.ruleunit.RuleUnitDescription;
+import org.drools.core.ruleunit.RuleUnitDescriptionLoader;
 import org.drools.core.util.Bag;
 import org.drools.javaparser.ast.expr.Expression;
 import org.drools.javaparser.ast.expr.MethodCallExpr;
@@ -38,7 +39,6 @@ import org.kie.soup.project.datamodel.commons.types.TypeResolver;
 
 import static java.util.Optional.empty;
 import static java.util.Optional.of;
-
 import static org.drools.modelcompiler.builder.generator.QueryGenerator.toQueryArg;
 
 public class RuleContext {
@@ -47,7 +47,7 @@ public class RuleContext {
     private final PackageModel packageModel;
     private final TypeResolver typeResolver;
     private DRLIdGenerator idGenerator;
-    private final RuleDescr descr;
+    private RuleDescr descr;
     private final boolean generatePatternDSL;
 
     private List<DeclarationSpec> allDeclarations = new ArrayList<>();
@@ -60,7 +60,7 @@ public class RuleContext {
     private List<QueryParameter> queryParameters = new ArrayList<>();
     private Optional<String> queryName = empty();
 
-    private RuleUnitDescr ruleUnitDescr;
+    private RuleUnitDescription ruleUnitDescr;
     private Map<String, Class<?>> ruleUnitVars = new HashMap<>();
 
     private Map<String, String> aggregatePatternMap = new HashMap<>();
@@ -83,18 +83,16 @@ public class RuleContext {
 
     public BaseDescr parentDesc = null;
 
-    public RuleContext(KnowledgeBuilderImpl kbuilder, PackageModel packageModel, RuleDescr ruleDescr, TypeResolver typeResolver, boolean generatePatternDSL) {
+    public RuleContext(KnowledgeBuilderImpl kbuilder, PackageModel packageModel, TypeResolver typeResolver, boolean generatePatternDSL) {
         this.kbuilder = kbuilder;
         this.packageModel = packageModel;
         this.idGenerator = packageModel.getExprIdGenerator();
-        this.descr = ruleDescr;
         exprPointer.push( this.expressions::add );
         this.typeResolver = typeResolver;
         this.generatePatternDSL = generatePatternDSL;
-        findUnitClass();
     }
 
-    private void findUnitClass() {
+    private void findUnitDescr() {
         if (descr == null) {
             return;
         }
@@ -118,8 +116,8 @@ public class RuleContext {
             }
         }
 
-        RuleUnitRegistry ruleUnitRegistry = kbuilder.getPackageRegistry( packageModel.getName() ).getPackage().getRuleUnitRegistry();
-        Optional<RuleUnitDescr> ruDescr = ruleUnitRegistry.getRuleUnitFor( unitName );
+        RuleUnitDescriptionLoader ruleUnitDescriptionLoader = kbuilder.getPackageRegistry(packageModel.getName() ).getPackage().getRuleUnitDescriptionLoader();
+        Optional<RuleUnitDescription> ruDescr = ruleUnitDescriptionLoader.getDescription(unitName );
         if (ruDescr.isPresent()) {
             ruleUnitDescr = ruDescr.get();
         } else if (!useNamingConvention) {
@@ -131,7 +129,7 @@ public class RuleContext {
         return generatePatternDSL;
     }
 
-    public RuleUnitDescr getRuleUnitDescr() {
+    public RuleUnitDescription getRuleUnitDescr() {
         return ruleUnitDescr;
     }
 
@@ -304,6 +302,11 @@ public class RuleContext {
         return descr;
     }
 
+    public void setDescr(RuleDescr descr) {
+        this.descr = descr;
+        findUnitDescr();
+    }
+
     public String getRuleName() {
         return descr.getName();
     }
@@ -447,6 +450,17 @@ public class RuleContext {
                 definedVars.remove(v);
                 allDeclarations.add( scopedDeclarations.remove( id + v ) );
             } );
+        }
+    }
+
+    public void setDialectFromAttributes(Collection<AttributeDescr> attributes) {
+        for (AttributeDescr a : attributes) {
+            if (a.getName().equals("dialect")) {
+                if (a.getValue().equals("mvel")) {
+                    setRuleDialect(RuleDialect.MVEL);
+                }
+                return;
+            }
         }
     }
 }

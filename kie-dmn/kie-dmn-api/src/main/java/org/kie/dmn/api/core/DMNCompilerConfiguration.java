@@ -22,8 +22,11 @@ import org.kie.dmn.api.marshalling.DMNExtensionRegister;
 
 public interface DMNCompilerConfiguration {
 
-    public List<DMNExtensionRegister> getRegisteredExtensions ();
-    public void addExtensions (List<DMNExtensionRegister> extensions);
-    public void addExtension (DMNExtensionRegister extension);
+    List<DMNExtensionRegister> getRegisteredExtensions();
+    void addExtensions(List<DMNExtensionRegister> extensions);
+    void addExtension(DMNExtensionRegister extension);
+
+    void addListener(AfterGeneratingSourcesListener listener);
+    List<AfterGeneratingSourcesListener> getAfterGeneratingSourcesListeners();
 
 }

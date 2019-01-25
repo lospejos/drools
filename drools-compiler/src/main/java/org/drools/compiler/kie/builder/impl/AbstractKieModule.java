@@ -194,20 +194,30 @@ public abstract class AbstractKieModule
         return typesMetaInfo;
     }
 
-    public InternalKnowledgeBase createKieBase( KieBaseModelImpl kBaseModel, KieProject kieProject, ResultsImpl messages, KieBaseConfiguration conf ) {
+    public KnowledgePackagesBuildResult buildKnowledgePackages(KieBaseModelImpl kBaseModel, KieProject kieProject, ResultsImpl messages) {
         Collection<KiePackage> pkgs = getKnowledgePackagesForKieBase(kBaseModel.getName());
 
         if ( pkgs == null ) {
             KnowledgeBuilder kbuilder = kieProject.buildKnowledgePackages(kBaseModel, messages);
             if ( kbuilder.hasErrors() ) {
                 // Messages already populated by the buildKnowlegePackages
-                return null;
+                return new KnowledgePackagesBuildResult(true, pkgs);
             }
+
+            // if we get to here, then we know the pkgs is now cached
+            pkgs = getKnowledgePackagesForKieBase(kBaseModel.getName());
         }
 
-        // if we get to here, then we know the pkgs is now cached
-        pkgs = getKnowledgePackagesForKieBase(kBaseModel.getName());
+        return new KnowledgePackagesBuildResult(false, pkgs);
+    }
 
+    public InternalKnowledgeBase createKieBase( KieBaseModelImpl kBaseModel, KieProject kieProject, ResultsImpl messages, KieBaseConfiguration conf ) {
+        KnowledgePackagesBuildResult knowledgePackagesBuildResult = buildKnowledgePackages(kBaseModel, kieProject, messages);
+        if(knowledgePackagesBuildResult.hasErrors()) {
+            return null;
+        }
+
+        Collection<KiePackage> pkgs = knowledgePackagesBuildResult.getPkgs();
         checkStreamMode( kBaseModel, conf, pkgs );
 
         ClassLoader cl = kieProject.getClassLoader();
@@ -241,8 +251,8 @@ public abstract class AbstractKieModule
         return kbConf;
     }
 
-    public KnowledgeBuilderConfiguration getBuilderConfiguration(KieBaseModel kBaseModel) {
-        KnowledgeBuilderConfigurationImpl pconf = new KnowledgeBuilderConfigurationImpl();
+    public KnowledgeBuilderConfiguration getBuilderConfiguration(KieBaseModel kBaseModel, ClassLoader classLoader) {
+        KnowledgeBuilderConfigurationImpl pconf = new KnowledgeBuilderConfigurationImpl(classLoader);
         setModelPropsOnConf( (KieBaseModelImpl) kBaseModel, pconf );
         return pconf;
     }

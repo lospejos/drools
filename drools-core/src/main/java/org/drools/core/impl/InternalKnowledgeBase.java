@@ -40,7 +40,7 @@ import org.drools.core.reteoo.ReteooBuilder;
 import org.drools.core.reteoo.SegmentMemory;
 import org.drools.core.rule.InvalidPatternException;
 import org.drools.core.rule.TypeDeclaration;
-import org.drools.core.ruleunit.RuleUnitRegistry;
+import org.drools.core.ruleunit.RuleUnitDescriptionRegistry;
 import org.drools.core.spi.FactHandleFactory;
 import org.drools.core.util.TripleStore;
 import org.kie.api.KieBase;
@@ -95,8 +95,6 @@ public interface InternalKnowledgeBase extends KieBase {
 
     void disposeStatefulSession(StatefulKnowledgeSessionImpl statefulSession);
 
-    StatefulKnowledgeSessionImpl getCachedSession(SessionConfiguration config, Environment environment);
-
     TripleStore getTripleStore();
 
     TraitRegistry getTraitRegistry();
@@ -122,7 +120,9 @@ public interface InternalKnowledgeBase extends KieBase {
     void addRules( Collection<RuleImpl> rules ) throws InvalidPatternException;
     void removeRules( Collection<RuleImpl> rules ) throws InvalidPatternException;
 
+    @Deprecated
     void addProcess( Process process );
+    @Deprecated
     void removeProcess( final String id );
 
     void addGlobal(String identifier, Class clazz);
@@ -143,7 +143,7 @@ public interface InternalKnowledgeBase extends KieBase {
     void setKieContainer( InternalKieContainer kieContainer );
 	void initMBeans();
 
-    RuleUnitRegistry getRuleUnitRegistry();
+    RuleUnitDescriptionRegistry getRuleUnitDescriptionRegistry();
     boolean hasUnits();
 
     SessionConfiguration getSessionConfiguration();

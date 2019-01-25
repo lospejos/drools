@@ -16,14 +16,15 @@
 
 package org.drools.examples.helloworld;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.kie.api.KieServices;
 import org.kie.api.event.rule.DebugAgendaEventListener;
 import org.kie.api.event.rule.DebugRuleRuntimeEventListener;
+import org.kie.api.logger.KieRuntimeLogger;
 import org.kie.api.runtime.KieContainer;
 import org.kie.api.runtime.KieSession;
-
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * This is a sample file to launch a rule package from a rule source file.
@@ -31,11 +32,8 @@ import java.util.List;
 public class HelloWorldExample {
 
     public static final void main(final String[] args) {
-        // KieServices is the factory for all KIE services 
-        KieServices ks = KieServices.Factory.get();
-        
         // From the kie services, a container is created from the classpath
-        KieContainer kc = ks.getKieClasspathContainer();
+        KieContainer kc = KieServices.get().getKieClasspathContainer();
 
         execute( kc );
     }
@@ -48,19 +46,18 @@ public class HelloWorldExample {
         // Once the session is created, the application can interact with it
         // In this case it is setting a global as defined in the
         // org/drools/examples/helloworld/HelloWorld.drl file
-        ksession.setGlobal( "list",
-                            new ArrayList<Object>() );
+        ksession.setGlobal( "list", new ArrayList<Object>() );
 
         // The application can also setup listeners
         ksession.addEventListener( new DebugAgendaEventListener() );
         ksession.addEventListener( new DebugRuleRuntimeEventListener() );
 
-        // To setup a file based audit logger, uncomment the next line
-        // KieRuntimeLogger logger = ks.getLoggers().newFileLogger( ksession, "./helloworld" );
+        // Set up a file based audit logger
+        KieRuntimeLogger logger = KieServices.get().getLoggers().newFileLogger( ksession, "./target/helloworld" );
 
-        // To setup a ThreadedFileLogger, so that the audit view reflects events whilst debugging,
+        // To set up a ThreadedFileLogger, so that the audit view reflects events whilst debugging,
         // uncomment the next line
-        // KieRuntimeLogger logger = ks.getLoggers().newThreadedFileLogger( ksession, "./helloworld", 1000 );
+        // KieRuntimeLogger logger = ks.getLoggers().newThreadedFileLogger( ksession, "./target/helloworld", 1000 );
 
         // The application can insert facts into the session
         final Message message = new Message();
@@ -71,8 +68,8 @@ public class HelloWorldExample {
         // and fire the rules
         ksession.fireAllRules();
 
-        // Remove comment if using logging
-        // logger.close();
+        // Close logger
+        logger.close();
 
         // and then dispose the session
         ksession.dispose();

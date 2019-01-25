@@ -24,6 +24,7 @@ import java.io.Reader;
 import java.io.UnsupportedEncodingException;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.util.Enumeration;
@@ -31,6 +32,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import java.util.zip.ZipInputStream;
 
 import org.drools.compiler.kie.builder.impl.event.KieModuleDiscovered;
 import org.drools.compiler.kie.builder.impl.event.KieServicesEventListerner;
@@ -209,7 +211,12 @@ public class ClasspathKieProject extends AbstractKieProject {
         }
 
         if ( urlPathToAdd.endsWith( ".apk" ) || isJarFile( urlPathToAdd, rootPath ) || urlPathToAdd.endsWith( "/content" ) ) {
-            pomProperties = getPomPropertiesFromZipFile(rootPath);
+            
+            if (rootPath.indexOf(".jar!") > 0) {
+                pomProperties = getPomPropertiesFromZipStream(rootPath);
+            } else {
+                pomProperties = getPomPropertiesFromZipFile(rootPath);
+            }
         } else {
             pomProperties = getPomPropertiesFromFileSystem(rootPath);
             if (pomProperties == null) {
@@ -236,14 +243,21 @@ public class ClasspathKieProject extends AbstractKieProject {
             File actualZipFile = new File( rootPath );
             if (actualZipFile.exists() && actualZipFile.isFile()) {
                 result = true;
+            } else if (urlPathToAdd.indexOf( ".jar!" ) > 0) {
+                // nested jar inside uberjar if the path includes .jar!
+                result = true;
             }
-        }
+        } 
         return result;
     }
 
     private static String getPomPropertiesFromZipFile(String rootPath) {
         File actualZipFile = new File( rootPath );
         if ( !actualZipFile.exists() ) {
+            if (rootPath.indexOf(".jar!") > 0) {
+                return getPomPropertiesFromZipStream(rootPath);
+            }
+            
             log.error( "Unable to load pom.properties from" + rootPath + " as jarPath cannot be found\n" + rootPath );
             return null;
         }
@@ -275,6 +289,42 @@ public class ClasspathKieProject extends AbstractKieProject {
                 log.error( "Error when closing InputStream to " + rootPath + "\n" + e.getMessage() );
             }
         }
+        return null;
+    }
+    
+    private static String getPomPropertiesFromZipStream(String rootPath) {
+       
+        rootPath = rootPath.substring( rootPath.lastIndexOf( '!' ) + 1 );
+        // read jar file from uber-jar
+        InputStream in = ClasspathKieProject.class.getResourceAsStream(rootPath);
+        ZipInputStream zipIn = new ZipInputStream(in);
+        try {
+            ZipEntry entry = zipIn.getNextEntry();
+            while (entry != null) {
+                // process each entry
+                String fileName = entry.getName();
+                if ( fileName.endsWith( "pom.properties" ) && fileName.startsWith( "META-INF/maven/" ) ) {
+                    String pomProps = StringUtils.readFileAsString( new InputStreamReader( zipIn, IoUtils.UTF8_CHARSET ) );
+                    //zipIn.closeEntry();
+                    
+                    return pomProps;
+                }
+                
+                // get next entry if needed
+                entry = zipIn.getNextEntry();
+            }
+        } catch ( Exception e ) {
+            log.error( "Unable to load pom.properties from zip input stream " + rootPath + "\n" + e.getMessage() );
+        } finally {
+            try {
+                if (zipIn != null) {
+                    zipIn.close();
+                }
+            } catch ( IOException e ) {
+                log.error( "Error when closing zip InputStream to " + rootPath + "\n" + e.getMessage() );
+            }
+        }   
+        
         return null;
     }
 
@@ -362,7 +412,7 @@ public class ClasspathKieProject extends AbstractKieProject {
             // switch to using getPath() instead of toExternalForm()
             if ( urlPath.indexOf( '!' ) > 0 ) {
                 urlPath = urlPath.substring( 0,
-                                             urlPath.indexOf( '!' ) );
+                                             urlPath.lastIndexOf( '!' ) );
             }
         } else if ( "vfs".equals( urlType ) ) {
             urlPath = getPathForVFS(url);
@@ -412,15 +462,26 @@ public class ClasspathKieProject extends AbstractKieProject {
                 log.warn( "Found virtual file " + url + " but org.jboss.vfs.VirtualFile is not available on the classpath" );
             }
         }
+        Method m2 = null;
+        try {
+            m2 = Class.forName("org.jboss.vfs.VFS").getMethod("getChild", URI.class);
+        } catch (Exception e) {
+            try {
+                // Try to retrieve the org.jboss.vfs.VFS class also on TCCL
+                m2 = Class.forName("org.jboss.vfs.VFS", true, Thread.currentThread().getContextClassLoader()).getMethod("getChild", URI.class);
+            } catch (Exception e1) {
+                // VFS is not available on the classpath - ignore
+                log.warn( "Found virtual file " + url + " but org.jboss.vfs.VFS is not available on the classpath" );
+            }
+        }
 
-        if (m == null) {
+        if (m == null || m2 == null) {
             return url.getPath();
         }
 
         String path = null;
         try {
-            Object content = url.openConnection().getContent();
-            File f = (File)m.invoke(content);
+            File f = (File)m.invoke( m2.invoke(null, url.toURI()) );
             path = f.getPath();
         } catch (Exception e) {
             log.error( "Error when reading virtual file from " + url.toString(), e );

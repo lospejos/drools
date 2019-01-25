@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import org.assertj.core.api.Assertions;
 import org.drools.core.impl.InternalKnowledgeBase;
@@ -44,7 +45,10 @@ import org.kie.internal.builder.KnowledgeBuilderErrors;
 import org.kie.internal.builder.KnowledgeBuilderFactory;
 import org.kie.internal.io.ResourceFactory;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Some basic unit tests for converter utility. Note that some of this may still
@@ -78,6 +82,35 @@ public class SpreadsheetCompilerUnitTest {
         assertTrue( drl.indexOf( "import example.model.Car;" ) > -1 );
         assertTrue( drl.indexOf( "package " ) == -1 );
 
+    }
+
+    @Test
+    public void testMultilineCommentsInDescription() {
+        final SpreadsheetCompiler converter = new SpreadsheetCompiler();
+        final InputStream stream = this.getClass().getResourceAsStream("/data/Multiline comment example.xls");
+        final String drl = converter.compile(stream,
+                                             InputType.XLS);
+
+        Assertions.assertThat(drl).containsSequence("/* Say", "Hello */", "/* Say", "Goobye */");
+        Assertions.assertThat(drl).doesNotContain("// Say");
+    }
+
+    @Test
+    public void testMultilineComplexCommentsInDescription() {
+        final SpreadsheetCompiler converter = new SpreadsheetCompiler();
+        final InputStream stream = this.getClass().getResourceAsStream("/data/Multiline comment example complex.xls");
+        final String drl = converter.compile(stream,
+                                             InputType.XLS);
+
+        Assertions.assertThat(drl).containsSequence("/* Do these actions:",
+                                                    "- Print Greeting",
+                                                    "- Set params: {message:'bye cruel world', status:'bye'} */",
+                                                    "/* Print message: \"Bye!\"",
+                                                    "Author: james@company.org */");
+
+        Assertions.assertThat(drl).doesNotContain("* - Print Greeting");
+        Assertions.assertThat(drl).doesNotContain("* - Set params: {message:'bye cruel world', status:'bye'}");
+        Assertions.assertThat(drl).doesNotContain("* Author: james@company.org");
     }
 
     @Test
@@ -392,13 +425,17 @@ public class SpreadsheetCompilerUnitTest {
 
     @Test
     public void testNegativeNumbers() throws Exception {
-        KieBase kbase = readKnowledgeBase( "/data/DT_WithNegativeNumbers.xls" );
+        KieBase kbase = readKnowledgeBase("/data/DT_WithNegativeNumbers.xls");
         KieSession ksession = kbase.newKieSession();
-        IntHolder i1 = new IntHolder( 1 );
-        IntHolder i2 = new IntHolder( -1 );
-        ksession.insert( i1 );
-        ksession.insert( i2 );
-        ksession.fireAllRules();
+        try {
+            IntHolder i1 = new IntHolder(1);
+            IntHolder i2 = new IntHolder(-1);
+            ksession.insert(i1);
+            ksession.insert(i2);
+            ksession.fireAllRules();
+        } finally {
+            ksession.dispose();
+        }
     }
 
     @Test
@@ -742,4 +779,15 @@ public class SpreadsheetCompilerUnitTest {
         Assertions.assertThat(expected).isEqualToIgnoringWhitespace(drl);
     }
 
+    @Test
+    public void testLhsOrder() {
+        // DROOLS-3080
+        final SpreadsheetCompiler converter = new SpreadsheetCompiler();
+        String drl = converter.compile("/data/LhsOrder.xls", InputType.XLS);
+
+        Assertions.assertThat(Stream.of(drl.split("\n")).map(String::trim).toArray())
+                .as("Lhs order is wrong")
+                .containsSequence("accumulate(Person(name == \"John\", $a : age); $max:max($a))",
+                        "$p:Person(name == \"John\", age == $max)");
+    }
 }

@@ -85,7 +85,7 @@ import org.drools.core.rule.InvalidPatternException;
 import org.drools.core.rule.JavaDialectRuntimeData;
 import org.drools.core.rule.TypeDeclaration;
 import org.drools.core.rule.WindowDeclaration;
-import org.drools.core.ruleunit.RuleUnitRegistry;
+import org.drools.core.ruleunit.RuleUnitDescriptionRegistry;
 import org.drools.core.spi.FactHandleFactory;
 import org.drools.core.util.TripleStore;
 import org.kie.api.builder.ReleaseId;
@@ -100,13 +100,12 @@ import org.kie.api.definition.type.Role;
 import org.kie.api.event.kiebase.KieBaseEventListener;
 import org.kie.api.internal.io.ResourceTypePackage;
 import org.kie.api.internal.utils.ServiceRegistry;
-import org.kie.api.internal.weaver.KieWeaverService;
 import org.kie.api.internal.weaver.KieWeavers;
 import org.kie.api.io.Resource;
-import org.kie.api.io.ResourceType;
 import org.kie.api.runtime.Environment;
 import org.kie.api.runtime.KieSession;
 import org.kie.api.runtime.KieSessionConfiguration;
+import org.kie.api.runtime.KieSessionsPool;
 import org.kie.api.runtime.StatelessKieSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -158,7 +157,7 @@ public class KnowledgeBaseImpl
     // lock for entire rulebase, used for dynamic updates
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
-    private transient Map<String, TypeDeclaration> classTypeDeclaration;
+    private final transient Map<String, TypeDeclaration> classTypeDeclaration = new ConcurrentHashMap<String, TypeDeclaration>();
 
     private ClassFieldAccessorCache classFieldAccessorCache;
     /** The root Rete-OO for this <code>RuleBase</code>. */
@@ -167,13 +166,11 @@ public class KnowledgeBaseImpl
     private transient Map<Integer, SegmentMemory.Prototype> segmentProtos = new ConcurrentHashMap<Integer, SegmentMemory.Prototype>();
 
     private KieComponentFactory kieComponentFactory;
-    
+
     // This is just a hack, so spring can find the list of generated classes
     public List<List<String>> jaxbClasses;
 
     public final Set<KieBaseEventListener> kieBaseListeners = Collections.newSetFromMap(new ConcurrentHashMap<KieBaseEventListener, Boolean>());
-
-    private transient SessionsCache sessionsCache;
 
     private transient Queue<Runnable> kbaseModificationsQueue = new ConcurrentLinkedQueue<Runnable>();
 
@@ -186,7 +183,7 @@ public class KnowledgeBaseImpl
     private String containerId;
     private AtomicBoolean mbeanRegistered = new AtomicBoolean(false);
 
-    private RuleUnitRegistry ruleUnitRegistry = new RuleUnitRegistry();
+    private RuleUnitDescriptionRegistry ruleUnitDescriptionRegistry = new RuleUnitDescriptionRegistry();
 
     private SessionConfiguration sessionConfiguration;
 
@@ -207,8 +204,6 @@ public class KnowledgeBaseImpl
         this.processes = new HashMap<String, Process>();
         this.globals = new HashMap<String, Class<?>>();
 
-        this.classTypeDeclaration = new HashMap<String, TypeDeclaration>();
-
         this.classFieldAccessorCache = new ClassFieldAccessorCache(this.rootClassLoader);
         kieComponentFactory = getConfiguration().getComponentFactory();
 
@@ -217,10 +212,6 @@ public class KnowledgeBaseImpl
         kieComponentFactory.getTripleStore().setId(id);
 
         setupRete();
-
-        if ( this.config.getSessionCacheOption().isEnabled() ) {
-            sessionsCache = new SessionsCache(this.config.getSessionCacheOption().isAsync());
-        }
 
         sessionConfiguration = new SessionConfigurationImpl( null, this.config.getClassLoader(), this.config.getChainedProperties() );
     }
@@ -269,7 +260,7 @@ public class KnowledgeBaseImpl
             kieBaseListeners.remove( listener );
         }
     }
-    
+
     public Collection<KieBaseEventListener> getKieBaseEventListeners() {
         return Collections.unmodifiableCollection( kieBaseListeners );
     }
@@ -323,12 +314,16 @@ public class KnowledgeBaseImpl
         InternalKnowledgePackage p = getPackage(packageName);
         return p == null ? null : p.getRule( ruleName );
     }
-    
+
     public Query getQuery(String packageName,
                           String queryName) {
         return getPackage(packageName).getRule( queryName );
     }
-    
+
+    public KieSessionsPool newKieSessionsPool( int initialSize) {
+        return new KieSessionsPoolImpl(this, initialSize);
+    }
+
     public KieSession newKieSession() {
         return newKieSession(null, EnvironmentFactory.newEnvironment());
     }
@@ -364,7 +359,7 @@ public class KnowledgeBaseImpl
         return internalInitSession( config, session );
     }
 
-    StatefulKnowledgeSessionImpl internalCreateStatefulKnowledgeSession( Environment environment, SessionConfiguration sessionConfig ) {
+    public StatefulKnowledgeSessionImpl internalCreateStatefulKnowledgeSession( Environment environment, SessionConfiguration sessionConfig ) {
         StatefulKnowledgeSessionImpl session = ( StatefulKnowledgeSessionImpl ) kieComponentFactory.getWorkingMemoryFactory()
                 .createWorkingMemory( nextWorkingMemoryCounter(), this, sessionConfig, environment );
         return internalInitSession( sessionConfig, session );
@@ -481,7 +476,7 @@ public class KnowledgeBaseImpl
         this.reteooBuilder = (ReteooBuilder) droolsStream.readObject();
         this.reteooBuilder.setRuleBase(this);
         this.rete = (Rete) droolsStream.readObject();
-        
+
         this.resolvedReleaseId = (ReleaseId) droolsStream.readObject();
 
         ( (DroolsObjectInputStream) droolsStream ).bindAllExtractors(this);
@@ -565,7 +560,7 @@ public class KnowledgeBaseImpl
 
         droolsStream.writeObject(this.reteooBuilder);
         droolsStream.writeObject(this.rete);
-        
+
         droolsStream.writeObject(this.resolvedReleaseId);
 
         if (!isDrools) {
@@ -604,8 +599,6 @@ public class KnowledgeBaseImpl
      * @throws ClassNotFoundException
      */
     private void populateTypeDeclarationMaps() throws ClassNotFoundException {
-        // FIXME: readLock
-        this.classTypeDeclaration = new HashMap<String, TypeDeclaration>();
         for (InternalKnowledgePackage pkg : this.pkgs.values()) {
             for (TypeDeclaration type : pkg.getTypeDeclarations().values()) {
                 type.setTypeClass(this.rootClassLoader.loadClass(type.getTypeClassName()));
@@ -623,19 +616,10 @@ public class KnowledgeBaseImpl
     }
 
     public void disposeStatefulSession(StatefulKnowledgeSessionImpl statefulSession) {
-        if (sessionsCache != null) {
-            synchronized (sessionsCache) {
-                sessionsCache.store(statefulSession);
-            }
-        }
         this.statefulSessions.remove(statefulSession);
         if (kieContainer != null) {
             kieContainer.disposeSession( statefulSession );
         }
-    }
-
-    public StatefulKnowledgeSessionImpl getCachedSession(SessionConfiguration config, Environment environment) {
-        return sessionsCache != null ? sessionsCache.getCachedSession(config) : null;
     }
 
     public FactHandleFactory newFactHandleFactory() {
@@ -729,7 +713,7 @@ public class KnowledgeBaseImpl
         clonedPkgs.sort(Comparator.comparing( (InternalKnowledgePackage p) -> p.getRules().size() ).reversed().thenComparing( InternalKnowledgePackage::getName ));
         enqueueModification( () -> internalAddPackages( clonedPkgs ) );
     }
-    
+
     @Override
     public Future<KiePackage> addPackage( final KiePackage newPkg ) {
         InternalKnowledgePackage clonedPkg = ((InternalKnowledgePackage)newPkg).deepCloneIfAlreadyInUse(rootClassLoader);
@@ -939,13 +923,11 @@ public class KnowledgeBaseImpl
             if ( ! newPkg.getResourceTypePackages().isEmpty() ) {
                 KieWeavers weavers = ServiceRegistry.getInstance().get( KieWeavers.class );
                 for ( ResourceTypePackage rtkKpg : newPkg.getResourceTypePackages().values() ) {
-                    ResourceType rt = rtkKpg.getResourceType();
-                    KieWeaverService factory = weavers.getWeavers().get( rt );
-                    factory.weave( this, newPkg, rtkKpg );
+                    weavers.weave( this, newPkg, rtkKpg );
                 }
             }
 
-            ruleUnitRegistry.add(newPkg.getRuleUnitRegistry());
+            ruleUnitDescriptionRegistry.add(newPkg.getRuleUnitDescriptionLoader());
 
             this.eventSupport.fireAfterPackageAdded( newPkg );
         }
@@ -1241,7 +1223,7 @@ public class KnowledgeBaseImpl
         // Merge imports
         final Map<String, ImportDeclaration> imports = pkg.getImports();
         imports.putAll(newPkg.getImports());
-        
+
         // Merge static imports
         for (String staticImport : newPkg.getStaticImports()) {
             pkg.addStaticImport(staticImport);
@@ -1334,12 +1316,9 @@ public class KnowledgeBaseImpl
         }
 
         if ( ! newPkg.getResourceTypePackages().isEmpty() ) {
+            KieWeavers weavers = ServiceRegistry.getInstance().get(KieWeavers.class);
             for ( ResourceTypePackage rtkKpg : newPkg.getResourceTypePackages().values() ) {
-                ResourceType rt = rtkKpg.getResourceType();
-                KieWeavers weavers = ServiceRegistry.getInstance().get(KieWeavers.class);
-
-                KieWeaverService weaver = weavers.getWeavers().get(rt);
-                weaver.merge( this, pkg, rtkKpg );
+                weavers.merge( this, pkg, rtkKpg );
             }
         }
     }
@@ -1763,9 +1742,9 @@ public class KnowledgeBaseImpl
             }
 
             List<TypeDeclaration> removedTypes = pkg.removeTypesGeneratedFromResource(resource);
-            
+
             boolean resourceTypePackageSomethingRemoved = pkg.removeFromResourceTypePackageGeneratedFromResource( resource );
-            
+
             modified |= !rulesToBeRemoved.isEmpty()
                         || !functionsToBeRemoved.isEmpty()
                         || !processesToBeRemoved.isEmpty()
@@ -1804,12 +1783,12 @@ public class KnowledgeBaseImpl
        return this.kieContainer;
     }
 
-    public RuleUnitRegistry getRuleUnitRegistry() {
-        return ruleUnitRegistry;
+    public RuleUnitDescriptionRegistry getRuleUnitDescriptionRegistry() {
+        return ruleUnitDescriptionRegistry;
     }
 
     public boolean hasUnits() {
-        return ruleUnitRegistry.hasUnits();
+        return ruleUnitDescriptionRegistry.hasUnits();
     }
 
     public List<AsyncReceiveNode> getReceiveNodes() {

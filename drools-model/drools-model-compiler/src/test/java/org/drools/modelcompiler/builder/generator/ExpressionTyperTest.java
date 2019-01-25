@@ -45,7 +45,8 @@ public class ExpressionTyperTest {
         imports = new HashSet<>();
         packageModel = new PackageModel("", null, false, null, new DRLIdGenerator());
         typeResolver = new ClassTypeResolver(imports, getClass().getClassLoader());
-        ruleContext = new RuleContext(knowledgeBuilder, packageModel, ruleDescr, typeResolver, true);
+        ruleContext = new RuleContext(knowledgeBuilder, packageModel, typeResolver, true);
+        ruleContext.setDescr(ruleDescr);
         imports.add("org.drools.modelcompiler.domain.Person");
     }
 
@@ -93,6 +94,13 @@ public class ExpressionTyperTest {
     public void testBigDecimalConstant() {
         final TypedExpression expected = typedResult("java.math.BigDecimal.ONE", BigDecimal.class);
         final TypedExpression actual = toTypedExpression("java.math.BigDecimal.ONE", null);
+        assertEquals(expected, actual);
+    }
+
+    @Test
+    public void testBigDecimalLiteral() {
+        final TypedExpression expected = typedResult("13.111B", BigDecimal.class);
+        final TypedExpression actual = toTypedExpression("13.111B", null);
         assertEquals(expected, actual);
     }
 

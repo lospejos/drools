@@ -36,7 +36,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiPredicate;
-import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import org.kie.dmn.feel.lang.EvaluationContext;
@@ -47,16 +46,100 @@ import org.slf4j.LoggerFactory;
 
 public class EvalHelper {
     public static final Logger LOG = LoggerFactory.getLogger( EvalHelper.class );
-    private static final Pattern SPACES_PATTERN = Pattern.compile( "[\\s\u00A0]+" );
 
     private static final Map<String, Method> accessorCache = new ConcurrentHashMap<>();
 
     public static String normalizeVariableName(String name) {
-        return SPACES_PATTERN.matcher( name.trim() ).replaceAll( " " );
+        // private static final Pattern SPACES_PATTERN = Pattern.compile( "[\\s\u00A0]+" );
+        // return SPACES_PATTERN.matcher( name.trim() ).replaceAll( " " );
+
+        // The above code was refactored for performance reasons
+        // Check org.drools.benchmarks.dmn.runtime.DMNEvaluateDecisionNameLengthBenchmark
+        // This method tries to return the original String whenever possible to avoid allocation of char[]
+
+        if (name == null || name.isEmpty()) {
+            return name;
+        }
+
+        // Find the first valid char, used to skip leading spaces
+        int firstValid = 0, size = name.length();
+
+        for (; firstValid < size; firstValid++) {
+            if (isValidChar(name.charAt(firstValid))) {
+                break;
+            }
+        }
+        if (firstValid == size) {
+            return "";
+        }
+
+        // Finds the last valid char, either before a non-regular space, the first of multiple spaces or the last char
+        int lastValid = 0, trailing = 0;
+        boolean inWhitespace = false;
+
+        for (int i = firstValid; i < size; i++) {
+            if (isValidChar(name.charAt(i))) {
+                lastValid = i + 1;
+                inWhitespace = false;
+            } else {
+                if (inWhitespace) {
+                    break;
+                }
+                inWhitespace = true;
+                if (name.charAt(i) != ' ') {
+                    break;
+                }
+            }
+        }
+
+        // Counts the number of spaces after 'lastValid' (to remove possible trailing spaces)
+        for (int i = lastValid; i < size && !isValidChar(name.charAt(i)); i++) {
+            trailing++;
+        }
+        if (lastValid + trailing == size) {
+            return firstValid != 0 || trailing != 0 ? name.substring(firstValid, lastValid) : name;
+        }
+
+        // There are valid chars after 'lastValid' and substring won't do (full normalization is required)
+        int pos = 0;
+        char[] target = new char[size-firstValid];
+
+        // Copy the chars know to be valid to the new array
+        for (int i = firstValid; i < lastValid; i++) {
+            target[pos++] = name.charAt(i);
+        }
+
+        // Copy valid chars after 'lastValid' to new array
+        // Many whitespaces are collapsed into one and trailing spaces are ignored
+        for (int i = lastValid + 1; i < size; i++) {
+            char c = name.charAt(i);
+            if (isValidChar(c)) {
+                if (inWhitespace) {
+                    target[pos++] = ' ';
+                }
+                target[pos++] = c;
+                inWhitespace = false;
+            } else {
+                inWhitespace = true;
+            }
+        }
+        return new String(target, 0, pos);
+    }
+
+    /**
+     * This method defines what characters are valid for the output of normalizeVariableName. Spaces and control characters are invalid.
+     * There is a fast-path for well known characters
+     */
+    private static boolean isValidChar(char c) {
+        if ( c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' ) {
+            return true;
+        }
+        return c != ' ' && c != '\u00A0' && !Character.isWhitespace(c) && !Character.isWhitespace(c);
     }
 
     public static BigDecimal getBigDecimalOrNull(Object value) {
-        if ( !(value instanceof Number
+        if ( value == null ||
+                !(value instanceof Number
                 || value instanceof String)
                 || (value instanceof Double
                 && (value.toString().equals("NaN") || value.toString().equals("Infinity") || value.toString().equals("-Infinity"))) ) {
@@ -69,8 +152,12 @@ public class EvalHelper {
             } else if ( value instanceof BigInteger ) {
                 value = new BigDecimal( (BigInteger) value, MathContext.DECIMAL128 );
             } else if ( value instanceof String ) {
-                // we need to remove leading zeros to prevent octal conversion
-                value = new BigDecimal( ((String) value).replaceFirst("^0+(?!$)", ""), MathContext.DECIMAL128 );
+                try {
+                    // we need to remove leading zeros to prevent octal conversion
+                    value = new BigDecimal( ((String) value).replaceFirst("^0+(?!$)", ""), MathContext.DECIMAL128 );
+                } catch (NumberFormatException e) {
+                    return null;
+                }
             } else {
                 // doubleValue() sometimes produce rounding errors, so we need to use toString() instead
                 // We also need to remove trailing zeros, if there are some so for 10d we get BigDecimal.valueOf(10)

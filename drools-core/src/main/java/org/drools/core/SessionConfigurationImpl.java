@@ -173,7 +173,7 @@ public class SessionConfigurationImpl extends SessionConfiguration {
                                                                                                                            QueryListenerOption.STANDARD.getAsString() ) ) );
 
         setTimerJobFactoryType(TimerJobFactoryType.resolveTimerJobFactoryType(this.chainedProperties.getProperty(TimerJobFactoryOption.PROPERTY_NAME,
-                                                                                                                 TimerJobFactoryType.TRACKABLE.getId())));
+                                                                                                                 TimerJobFactoryType.THREAD_SAFE_TRACKABLE.getId())));
     }
 
     public SessionConfigurationImpl addDefaultProperties(Properties properties) {
@@ -325,6 +325,11 @@ public class SessionConfigurationImpl extends SessionConfiguration {
             initWorkItemManagerFactory();
         }
         return this.workItemManagerFactory;
+    }
+
+    @Override
+    public void setWorkItemManagerFactory(WorkItemManagerFactory workItemManagerFactory) {
+        this.workItemManagerFactory = workItemManagerFactory;
     }
 
     @SuppressWarnings("unchecked")

@@ -26,8 +26,8 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import javax.management.ObjectName;
 
+import javax.management.ObjectName;
 import org.drools.compiler.builder.impl.KnowledgeBuilderImpl;
 import org.drools.compiler.kie.util.KieJarChangeSet;
 import org.drools.compiler.kproject.models.KieBaseModelImpl;
@@ -35,12 +35,15 @@ import org.drools.compiler.kproject.models.KieSessionModelImpl;
 import org.drools.compiler.management.KieContainerMonitor;
 import org.drools.compiler.reteoo.compiled.ObjectTypeNodeCompiler;
 import org.drools.core.InitialFact;
+import org.drools.core.SessionConfiguration;
 import org.drools.core.SessionConfigurationImpl;
 import org.drools.core.common.ProjectClassLoader;
 import org.drools.core.impl.InternalKieContainer;
 import org.drools.core.impl.InternalKnowledgeBase;
+import org.drools.core.impl.KnowledgeBaseImpl;
 import org.drools.core.impl.RuleUnitExecutorSession;
 import org.drools.core.impl.StatefulKnowledgeSessionImpl;
+import org.drools.core.impl.StatefulSessionPool;
 import org.drools.core.impl.StatelessKnowledgeSessionImpl;
 import org.drools.core.management.DroolsManagementAgent;
 import org.drools.core.management.DroolsManagementAgent.CBSKey;
@@ -61,10 +64,12 @@ import org.kie.api.event.KieRuntimeEventManager;
 import org.kie.api.io.ResourceType;
 import org.kie.api.logger.KieLoggers;
 import org.kie.api.runtime.Environment;
+import org.kie.api.runtime.KieContainerSessionsPool;
 import org.kie.api.runtime.KieSession;
 import org.kie.api.runtime.KieSessionConfiguration;
 import org.kie.api.runtime.StatelessKieSession;
 import org.kie.api.runtime.rule.RuleUnitExecutor;
+import org.kie.api.time.Calendar;
 import org.kie.internal.builder.ChangeType;
 import org.kie.internal.builder.KnowledgeBuilder;
 import org.kie.internal.builder.ResourceChangeSet;
@@ -96,6 +101,8 @@ public class KieContainerImpl
     private ReleaseId containerReleaseId;
 
 	private final String containerId;
+
+    private final Map<String, KieSessionConfiguration> sessionConfsCache = new ConcurrentHashMap<>();
 
     public KieModule getMainKieModule() {
         return kr.getKieModule(getReleaseId());
@@ -195,6 +202,13 @@ public class KieContainerImpl
         return results;
     }
 
+    public Results updateToKieModule(InternalKieModule newKM) {
+        checkNotClasspathKieProject();
+        Results results = update(((KieModuleKieProject) kProject).getInternalKieModule(), newKM);
+        containerReleaseId = newKM.getReleaseId();
+        return results;
+    }
+
     public Results updateDependencyToVersion(ReleaseId currentReleaseId, ReleaseId newReleaseId) {
         ReleaseId installedReleaseId = getReleaseId();
         if (currentReleaseId.getGroupId().equals(installedReleaseId.getGroupId()) &&
@@ -220,17 +234,17 @@ public class KieContainerImpl
 
     private Results update(final InternalKieModule currentKM, final ReleaseId newReleaseId) {
         final InternalKieModule newKM = (InternalKieModule) kr.getKieModule( newReleaseId );
-        if (newKM == null) {
-            return null;
-        }
-        final KieJarChangeSet cs = currentKM.getChanges( newKM );
+        return newKM == null ? null : update( currentKM, newKM );
+    }
 
+    private Results update( InternalKieModule currentKM, InternalKieModule newKM ) {
+        final KieJarChangeSet cs = currentKM.getChanges( newKM );
         List<String> modifiedClassNames = getModifiedClasses(cs);
         final boolean modifyingUsedClass = isModifyingUsedClass( modifiedClassNames, getClassLoader() );
         final Collection<Class<?>> modifiedClasses = reinitModifiedClasses( newKM, modifiedClassNames, getClassLoader(), modifyingUsedClass );
         final Collection<String> unchangedResources = getUnchangedResources( newKM, cs );
 
-        Map<String, KieBaseModel> currentKieBaseModels = ((KieModuleKieProject) kProject).updateToModule( newKM );
+        Map<String, KieBaseModel> currentKieBaseModels = ((KieModuleKieProject ) kProject).updateToModule( newKM );
 
         final ResultsImpl results = new ResultsImpl();
 
@@ -245,7 +259,7 @@ public class KieContainerImpl
                 kbasesToRemove.add( kbaseName );
             } else {
                 final InternalKnowledgeBase kBase = (InternalKnowledgeBase) kBaseEntry.getValue();
-                KieBaseUpdateContext context = new KieBaseUpdateContext( kProject, kBase, currentKM, newReleaseId, newKM,
+                KieBaseUpdateContext context = new KieBaseUpdateContext( kProject, kBase, currentKM, newKM,
                                                                          cs, modifiedClasses, modifyingUsedClass, unchangedResources,
                                                                          results, newKieBaseModel, currentKieBaseModel );
                 kBase.enqueueModification( currentKM.createKieBaseUpdater( context ) );
@@ -441,8 +455,28 @@ public class KieContainerImpl
     }
 
     public KieSession newKieSession(Environment environment, KieSessionConfiguration conf) {
-        KieSessionModel defaultKieSessionModel = findKieSessionModel(false);
-        return newKieSession(defaultKieSessionModel.getName(), environment, conf);
+        return newKieSession(null, environment, conf);
+    }
+
+    public KieContainerSessionsPool newKieSessionsPool( int initialSize) {
+        return new KieContainerSessionsPoolImpl(this, initialSize);
+    }
+
+    StatefulSessionPool createKieSessionsPool(String kSessionName, KieSessionConfiguration conf, Environment env, int initialSize, boolean stateless) {
+        KieSessionModel kSessionModel = kSessionName != null ? getKieSessionModel(kSessionName) : findKieSessionModel(false);
+        if ( kSessionModel == null ) {
+            log.error("Unknown KieSession name: " + kSessionName);
+            return null;
+        }
+        KnowledgeBaseImpl kBase = (KnowledgeBaseImpl) getKieBaseFromKieSessionModel( kSessionModel );
+        return kBase == null ? null : new StatefulSessionPool(kBase, initialSize, () -> {
+            SessionConfiguration sessConf = conf != null ? (SessionConfiguration) conf : kBase.getSessionConfiguration();
+            StatefulKnowledgeSessionImpl kSession = stateless ?
+                    kBase.internalCreateStatefulKnowledgeSession( env, sessConf ).setStateless( true ) :
+                    (StatefulKnowledgeSessionImpl) kBase.newKieSession( sessConf, env );
+            registerNewKieSession( kSessionModel, ( InternalKnowledgeBase ) kBase, kSession );
+            return kSession;
+        });
     }
 
     private KieSessionModel findKieSessionModel(boolean stateless) {
@@ -513,6 +547,28 @@ public class KieContainerImpl
             log.error("Unknown KieSession name: " + kSessionName);
             return null;
         }
+
+        KieBase kBase = getKieBaseFromKieSessionModel( kSessionModel );
+        if ( kBase == null ) return null;
+
+        KieSession kSession = kBase.newKieSession( conf != null ? conf : getKieSessionConfiguration( kSessionModel ), environment );
+        registerNewKieSession( kSessionModel, ( InternalKnowledgeBase ) kBase, kSession );
+        return kSession;
+    }
+
+    private void registerNewKieSession( KieSessionModel kSessionModel, InternalKnowledgeBase kBase, KieSession kSession ) {
+        if (isJndiAvailable()) {
+            wireSessionComponents( kSessionModel, kSession );
+        }
+        registerLoggers(kSessionModel, kSession);
+        registerCalendars(kSessionModel, kSession);
+
+        ((StatefulKnowledgeSessionImpl ) kSession).initMBeans(containerId, kBase.getId(), kSessionModel.getName());
+
+        kSessions.put(kSessionModel.getName(), kSession);
+    }
+
+    private KieBase getKieBaseFromKieSessionModel( KieSessionModel kSessionModel ) {
         if (kSessionModel.getType() == KieSessionModel.KieSessionType.STATELESS) {
             throw new RuntimeException("Trying to create a stateful KieSession from a stateless KieSessionModel: " + kSessionModel.getName());
         }
@@ -521,20 +577,10 @@ public class KieContainerImpl
             log.error("Unknown KieBase name: " + kSessionModel.getKieBaseModel().getName());
             return null;
         }
-
-        KieSession kSession = kBase.newKieSession( conf != null ? conf : getKieSessionConfiguration( kSessionModel ), environment );
-        if (isJndiAvailable()) {
-            wireSessionComponents( kSessionModel, kSession );
-        }
-        registerLoggers(kSessionModel, kSession);
-
-        ((StatefulKnowledgeSessionImpl) kSession).initMBeans(containerId, ((InternalKnowledgeBase) kBase).getId(), kSessionModel.getName());
-
-        kSessions.put(kSessionModel.getName(), kSession);
-        return kSession;
+        return kBase;
     }
 
-    private void registerLoggers(KieSessionModelImpl kSessionModel, KieRuntimeEventManager kSession) {
+    private void registerLoggers(KieSessionModel kSessionModel, KieRuntimeEventManager kSession) {
         KieLoggers kieLoggers = KieServices.Factory.get().getLoggers();
         if (kSessionModel.getConsoleLogger() != null) {
             kieLoggers.newConsoleLogger(kSession);
@@ -545,6 +591,17 @@ public class KieContainerImpl
                 kieLoggers.newThreadedFileLogger(kSession, fileLogger.getFile(), fileLogger.getInterval());
             } else {
                 kieLoggers.newFileLogger(kSession, fileLogger.getFile());
+            }
+        }
+    }
+
+    private void registerCalendars(KieSessionModel kSessionModel, KieSession kSession) {
+        for (Map.Entry<String, String> entry : kSessionModel.getCalendars().entrySet()) {
+            try {
+                Calendar calendar = (Calendar) getClassLoader().loadClass( entry.getValue() ).newInstance();
+                kSession.getCalendars().set( entry.getKey(), calendar );
+            } catch (InstantiationException | IllegalAccessException | ClassNotFoundException e) {
+                log.error( "Cannot instance calendar " + entry.getKey(), e );
             }
         }
     }
@@ -603,13 +660,15 @@ public class KieContainerImpl
     }
 
     private KieSessionConfiguration getKieSessionConfiguration( KieSessionModel kSessionModel ) {
-        KieSessionConfiguration ksConf = new SessionConfigurationImpl( null, kProject.getClassLoader() );
+        KieSessionConfiguration ksConf = sessionConfsCache.computeIfAbsent(kSessionModel.getName(),
+                k -> new SessionConfigurationImpl( null, kProject.getClassLoader() ) );
         ksConf.setOption( kSessionModel.getClockType() );
         ksConf.setOption( kSessionModel.getBeliefSystem() );
         return ksConf;
     }
 
     public void dispose() {
+        sessionConfsCache.clear();
         kBases.values().forEach( kb -> ( (InternalKnowledgeBase) kb ).setKieContainer( null ) );
 
         Set<DroolsManagementAgent.CBSKey> cbskeys = new HashSet<DroolsManagementAgent.CBSKey>();

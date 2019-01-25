@@ -8,6 +8,7 @@ import java.util.stream.Collectors;
 
 import javax.xml.namespace.QName;
 
+import org.kie.dmn.api.core.AfterGeneratingSourcesListener;
 import org.kie.dmn.api.core.DMNMessage;
 import org.kie.dmn.api.core.DMNType;
 import org.kie.dmn.api.core.ast.BusinessKnowledgeModelNode;
@@ -24,6 +25,10 @@ import org.kie.dmn.core.ast.DMNListEvaluator;
 import org.kie.dmn.core.ast.DMNLiteralExpressionEvaluator;
 import org.kie.dmn.core.ast.DMNRelationEvaluator;
 import org.kie.dmn.core.ast.EvaluatorResultImpl;
+import org.kie.dmn.core.compiler.execmodelbased.DMNRuleClassFile;
+import org.kie.dmn.core.compiler.execmodelbased.ExecModelDMNClassLoaderCompiler;
+import org.kie.dmn.core.compiler.execmodelbased.ExecModelDMNEvaluatorCompiler;
+import org.kie.dmn.core.compiler.execmodelbased.ExecModelDMNMavenSourceCompiler;
 import org.kie.dmn.core.impl.BaseDMNTypeImpl;
 import org.kie.dmn.core.impl.DMNModelImpl;
 import org.kie.dmn.core.util.Msg;
@@ -69,15 +74,35 @@ public class DMNEvaluatorCompiler {
 
     protected final DMNCompilerImpl compiler;
 
-    public DMNEvaluatorCompiler(DMNCompilerImpl compiler) {
+    protected DMNEvaluatorCompiler(DMNCompilerImpl compiler) {
         this.compiler = compiler;
+    }
+
+    public static DMNEvaluatorCompiler dmnEvaluatorCompilerFactory(DMNCompilerImpl dmnCompiler, DMNCompilerConfigurationImpl dmnCompilerConfig) {
+        DMNRuleClassFile dmnRuleClassFile = new DMNRuleClassFile(dmnCompilerConfig.getRootClassLoader());
+        if (dmnRuleClassFile.hasCompiledClasses()) {
+            logger.debug("Using ExecModelDMNClassLoaderCompiler.");
+            return new ExecModelDMNClassLoaderCompiler(dmnCompiler, dmnRuleClassFile);
+        } else if (dmnCompilerConfig.isDeferredCompilation()) {
+            ExecModelDMNMavenSourceCompiler evaluatorCompiler = new ExecModelDMNMavenSourceCompiler(dmnCompiler);
+            for (AfterGeneratingSourcesListener l : dmnCompilerConfig.getAfterGeneratingSourcesListeners()) {
+                evaluatorCompiler.register(l);
+            }
+            return evaluatorCompiler;
+        } else if (dmnCompilerConfig.isUseExecModelCompiler()) {
+            logger.debug("Using ExecModelDMNEvaluatorCompiler.");
+            return new ExecModelDMNEvaluatorCompiler(dmnCompiler);
+        } else {
+            logger.debug("default DMNEvaluatorCompiler.");
+            return new DMNEvaluatorCompiler(dmnCompiler);
+        }
     }
 
     public DMNExpressionEvaluator compileExpression(DMNCompilerContext ctx, DMNModelImpl model, DMNBaseNode node, String exprName, Expression expression) {
         if ( expression == null ) {
             if( node instanceof DecisionNode ) {
                 MsgUtil.reportMessage( logger,
-                                       DMNMessage.Severity.ERROR,
+                                       DMNMessage.Severity.WARN,
                                        node.getSource(),
                                        model,
                                        null,
@@ -86,7 +111,7 @@ public class DMNEvaluatorCompiler {
                                        node.getIdentifierString() );
             } else if( node instanceof BusinessKnowledgeModelNode ) {
                 MsgUtil.reportMessage( logger,
-                                       DMNMessage.Severity.ERROR,
+                                       DMNMessage.Severity.WARN,
                                        node.getSource(),
                                        model,
                                        null,
@@ -107,7 +132,7 @@ public class DMNEvaluatorCompiler {
         } else if ( expression instanceof LiteralExpression ) {
             return compileLiteralExpression( ctx, model, node, exprName, (LiteralExpression) expression );
         } else if ( expression instanceof DecisionTable ) {
-            return compileDecisionTable( ctx, model, node, exprName, (DecisionTable) expression );
+            return compileDecisionTable(ctx, model, node, exprName, (DecisionTable) expression);
         } else if ( expression instanceof FunctionDefinition ) {
             return compileFunctionDefinition( ctx, model, node, exprName, (FunctionDefinition) expression );
         } else if ( expression instanceof Context ) {
@@ -130,6 +155,14 @@ public class DMNEvaluatorCompiler {
                                    node.getIdentifierString() );
         }
         return null;
+    }
+
+    protected ClassLoader getRootClassLoader() {
+        return getDmnCompilerConfig().getRootClassLoader();
+    }
+
+    protected DMNCompilerConfigurationImpl getDmnCompilerConfig() {
+        return (DMNCompilerConfigurationImpl) compiler.getDmnCompilerConfig();
     }
 
     private DMNExpressionEvaluator compileInvocation(DMNCompilerContext ctx, DMNModelImpl model, DMNBaseNode node, Invocation expression) {
@@ -445,7 +478,7 @@ public class DMNEvaluatorCompiler {
                                                    index );
             } else if ( ic.getInputExpression().getTypeRef() != null ) {
                 QName inputExpressionTypeRef = ic.getInputExpression().getTypeRef();
-                QName resolvedInputExpressionTypeRef = DMNCompilerImpl.getNamespaceAndName(ic.getInputExpression(), model.getImportAliasesForNS(), inputExpressionTypeRef);
+                QName resolvedInputExpressionTypeRef = DMNCompilerImpl.getNamespaceAndName(ic.getInputExpression(), model.getImportAliasesForNS(), inputExpressionTypeRef, model.getNamespace());
                 BaseDMNTypeImpl typeRef = (BaseDMNTypeImpl) model.getTypeRegistry().resolveType(resolvedInputExpressionTypeRef.getNamespaceURI(), resolvedInputExpressionTypeRef.getLocalPart());
                 inputType = typeRef;
                 inputValues = typeRef.getAllowedValuesFEEL();
@@ -546,6 +579,9 @@ public class DMNEvaluatorCompiler {
             }
             for ( LiteralExpression le : dr.getOutputEntry() ) {
                 String expressionText = le.getText();
+                if (expressionText == null || expressionText.isEmpty()) {
+                    expressionText = "null"; // addendum to DROOLS-2075 Allow empty output cell on DTs
+                }
                 CompiledExpression compiledExpression = ctx.getFeelHelper().compileFeelExpression(
                         ctx,
                         expressionText,
@@ -590,7 +626,7 @@ public class DMNEvaluatorCompiler {
         BaseDMNTypeImpl typeRef = (BaseDMNTypeImpl) model.getTypeRegistry().unknown();
         if ( oc.getTypeRef() != null ) {
             QName outputExpressionTypeRef = oc.getTypeRef();
-            QName resolvedOutputExpressionTypeRef = DMNCompilerImpl.getNamespaceAndName(oc, model.getImportAliasesForNS(), outputExpressionTypeRef);
+            QName resolvedOutputExpressionTypeRef = DMNCompilerImpl.getNamespaceAndName(oc, model.getImportAliasesForNS(), outputExpressionTypeRef, model.getNamespace());
             typeRef = (BaseDMNTypeImpl) model.getTypeRegistry().resolveType(resolvedOutputExpressionTypeRef.getNamespaceURI(), resolvedOutputExpressionTypeRef.getLocalPart());
             if( typeRef == null ) {
                 typeRef = (BaseDMNTypeImpl) model.getTypeRegistry().unknown();
@@ -599,7 +635,7 @@ public class DMNEvaluatorCompiler {
             QName inferredTypeRef = recurseUpToInferTypeRef(model, oc, dt);
             // if inferredTypeRef is null, a std err will have been reported
             if (inferredTypeRef != null) {
-                QName resolvedInferredTypeRef = DMNCompilerImpl.getNamespaceAndName(oc, model.getImportAliasesForNS(), inferredTypeRef);
+                QName resolvedInferredTypeRef = DMNCompilerImpl.getNamespaceAndName(oc, model.getImportAliasesForNS(), inferredTypeRef, model.getNamespace());
                 typeRef = (BaseDMNTypeImpl) model.getTypeRegistry().resolveType(resolvedInferredTypeRef.getNamespaceURI(), resolvedInferredTypeRef.getLocalPart());
             }
         }

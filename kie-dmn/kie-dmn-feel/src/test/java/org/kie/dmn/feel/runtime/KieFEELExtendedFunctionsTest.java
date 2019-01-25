@@ -17,12 +17,14 @@
 package org.kie.dmn.feel.runtime;
 
 import java.math.BigDecimal;
+import java.math.MathContext;
 import java.time.LocalDate;
 import java.time.ZonedDateTime;
 import java.util.Arrays;
 import java.util.Collection;
 
 import org.junit.runners.Parameterized;
+import org.kie.dmn.api.feel.runtime.events.FEELEvent;
 
 public class KieFEELExtendedFunctionsTest extends BaseFEELTest {
 
@@ -34,7 +36,14 @@ public class KieFEELExtendedFunctionsTest extends BaseFEELTest {
                 { "today()", LocalDate.class, null },
                 { "modulo( 4, 3 )", new BigDecimal( "1" ), null },
                 { "split( \"foo,bar,baz\", \",\" )", Arrays.asList( "foo", "bar", "baz" ), null },
+                { "split( delimiter: \",\", string: \"foo,bar,baz\" )", Arrays.asList( "foo", "bar", "baz" ), null },
                 { "split( \"foo;bar|baz\", \"[;|]\" )", Arrays.asList( "foo", "bar", "baz" ), null },
+                { "sqrt( 9 )", BigDecimal.valueOf( 3.0 ), null },
+                { "sqrt( 10 )", new BigDecimal("3.162277660168379331998893544432719"), null },
+                { "stddev( 10 )", null, FEELEvent.Severity.ERROR },
+                { "nn sum( 10, null, 20, 40, null )", new BigDecimal("70", MathContext.DECIMAL128), null },
+                { "stddev( 1, 2, 3 )", BigDecimal.valueOf( 1.0 ) , null},
+                { "stddev( [1, 2, 3] )", BigDecimal.valueOf( 1.0 ) , null},
         };
         return addAdditionalParameters(cases, true);
     }

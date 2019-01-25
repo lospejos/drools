@@ -18,6 +18,7 @@ package org.kie.dmn.core.impl;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -28,7 +29,11 @@ import java.util.stream.Collectors;
 import javax.xml.namespace.QName;
 
 import org.drools.core.definitions.InternalKnowledgePackage;
+import org.drools.core.definitions.ResourceTypePackageRegistry;
+import org.drools.core.impl.InternalKnowledgeBase;
 import org.drools.core.impl.KnowledgeBaseImpl;
+import org.kie.api.KieBase;
+import org.kie.api.definition.KiePackage;
 import org.kie.api.internal.io.ResourceTypePackage;
 import org.kie.api.io.ResourceType;
 import org.kie.api.runtime.KieRuntime;
@@ -70,20 +75,20 @@ public class DMNRuntimeImpl
         implements DMNRuntime {
     private static final Logger logger = LoggerFactory.getLogger( DMNRuntimeImpl.class );
 
-    private KieRuntime                         runtime;
     private DMNRuntimeEventManagerImpl         eventManager;
+    private final InternalKnowledgeBase        knowledgeBase;
 
     private boolean overrideRuntimeTypeCheck = false;
 
-    public DMNRuntimeImpl(KieRuntime runtime) {
-        this.runtime = runtime;
+    public DMNRuntimeImpl(InternalKnowledgeBase knowledgeBase) {
+        this.knowledgeBase = knowledgeBase;
         this.eventManager = new DMNRuntimeEventManagerImpl();
     }
 
     @Override
     public List<DMNModel> getModels() {
         List<DMNModel> models = new ArrayList<>(  );
-        runtime.getKieBase().getKiePackages().forEach( kpkg -> {
+        knowledgeBase.getKiePackages().forEach( kpkg -> {
             DMNPackage dmnPkg = (DMNPackage) ((InternalKnowledgePackage) kpkg).getResourceTypePackages().get( ResourceType.DMN );
             if( dmnPkg != null ) {
                 dmnPkg.getAllModels().values().forEach( model -> models.add( model ) );
@@ -96,24 +101,24 @@ public class DMNRuntimeImpl
     public DMNModel getModel(String namespace, String modelName) {
         Objects.requireNonNull(namespace, () -> MsgUtil.createMessage(Msg.PARAM_CANNOT_BE_NULL, "namespace"));
         Objects.requireNonNull(modelName, () -> MsgUtil.createMessage(Msg.PARAM_CANNOT_BE_NULL, "modelName"));
-        InternalKnowledgePackage kpkg = (InternalKnowledgePackage) runtime.getKieBase().getKiePackage( namespace );
+        InternalKnowledgePackage kpkg = (InternalKnowledgePackage) knowledgeBase.getKiePackage( namespace );
         if( kpkg == null ) {
             return null;
         }
-        Map<ResourceType, ResourceTypePackage> map = kpkg.getResourceTypePackages();
+        ResourceTypePackageRegistry map = kpkg.getResourceTypePackages();
         DMNPackage dmnpkg = (DMNPackage) map.get( ResourceType.DMN );
         return dmnpkg != null ? dmnpkg.getModel( modelName ) : null;
     }
-    
+
     @Override
     public DMNModel getModelById(String namespace, String modelId) {
         Objects.requireNonNull(namespace, () -> MsgUtil.createMessage(Msg.PARAM_CANNOT_BE_NULL, "namespace"));
         Objects.requireNonNull(modelId, () -> MsgUtil.createMessage(Msg.PARAM_CANNOT_BE_NULL, "modelId"));
-        InternalKnowledgePackage kpkg = (InternalKnowledgePackage) runtime.getKieBase().getKiePackage( namespace );
+        InternalKnowledgePackage kpkg = (InternalKnowledgePackage) knowledgeBase.getKiePackage( namespace );
         if( kpkg == null ) {
             return null;
         }
-        Map<ResourceType, ResourceTypePackage> map = kpkg.getResourceTypePackages();
+        ResourceTypePackageRegistry map = kpkg.getResourceTypePackages();
         DMNPackage dmnpkg = (DMNPackage) map.get( ResourceType.DMN );
         return dmnpkg != null ? dmnpkg.getModelById( modelId ) : null;
     }
@@ -341,7 +346,7 @@ public class DMNRuntimeImpl
                                            Msg.ERROR_EVAL_NODE_DEP_WRONG_TYPE,
                                            getIdentifier( bkm ),
                                            getDependencyIdentifier(bkm, dep),
-                                           MsgUtil.clipString(result.getContext().get(dep.getName()).toString(), 50),
+                                           MsgUtil.clipString(Objects.toString(result.getContext().get(dep.getName())), 50),
                                            ((DMNBaseNode) dep).getType()
                                            );
                     return;
@@ -499,7 +504,7 @@ public class DMNRuntimeImpl
                                 Msg.ERROR_EVAL_NODE_DEP_WRONG_TYPE,
                                 getIdentifier( decision ),
                                 getDependencyIdentifier(decision, dep),
-                                MsgUtil.clipString(result.getContext().get(dep.getName()).toString(), 50),
+                                MsgUtil.clipString(Objects.toString(result.getContext().get(dep.getName())), 50),
                                 ((DMNBaseNode) dep).getType()
                                 );
                         reportFailure( dr, message, DMNDecisionResult.DecisionEvaluationStatus.SKIPPED );
@@ -692,7 +697,7 @@ public class DMNRuntimeImpl
     public List<DMNProfile> getProfiles() {
         // need list to preserve ordering
         List<DMNProfile> profiles = new ArrayList<>();
-        runtime.getKieBase().getKiePackages().forEach(kpkg -> {
+        knowledgeBase.getKiePackages().forEach(kpkg -> {
             DMNPackageImpl dmnPkg = (DMNPackageImpl) ((InternalKnowledgePackage) kpkg).getResourceTypePackages().get(ResourceType.DMN);
             if (dmnPkg != null) {
                 for (DMNProfile p : dmnPkg.getProfiles()) {
@@ -707,6 +712,6 @@ public class DMNRuntimeImpl
 
     @Override
     public ClassLoader getRootClassLoader() {
-        return ((KnowledgeBaseImpl) runtime.getKieBase()).getRootClassLoader();
+        return knowledgeBase.getRootClassLoader();
     }
 }

@@ -17,12 +17,14 @@
 package org.drools.compiler.kie.builder.impl;
 
 import org.drools.compiler.CommonTestMethodBase;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.kie.api.KieServices;
 import org.kie.api.builder.KieBuilder;
 import org.kie.api.builder.KieFileSystem;
 import org.kie.api.io.Resource;
 import org.kie.internal.builder.IncrementalResults;
+import org.kie.internal.io.ResourceFactory;
 
 import static org.junit.Assert.assertEquals;
 
@@ -46,11 +48,36 @@ public class KieBuilderSetImplTest extends CommonTestMethodBase {
     }
 
     @Test
+    @Ignore("RHPAM-1184, RHDM-601")
+    public void testBuildPercentageAndWhiteSpaceInName() throws Exception {
+        final KieServices ks = KieServices.Factory.get();
+        final KieFileSystem kfs = ks.newKieFileSystem();
+
+        kfs.write("src/main/resources/my rule 100% okay.rdrl",
+                  ResourceFactory.newInputStreamResource(this.getClass().getResourceAsStream("my rule 100% okay.rdrl")));
+
+        final KieBuilderSetImpl kieBuilderSet = new KieBuilderSetImpl(kieBuilder(ks, kfs));
+
+        kieBuilderSet.setFiles(new String[]{"src/main/resources/my rule 100% okay.rdrl"});
+
+        final IncrementalResults build = kieBuilderSet.build();
+
+        assertEquals(0, build.getAddedMessages().size());
+        assertEquals(0, build.getRemovedMessages().size());
+    }
+
+    @Test
     public void testDummyResourceWithAnEncodedFileName() {
         final Resource dummyResource = new KieBuilderSetImpl.DummyResource( "Dummy%20Resource" );
         final Resource testResource = new KieBuilderSetImpl.DummyResource( "Dummy Resource" );
 
         assertEquals( testResource, dummyResource );
+    }
+
+    @Test
+    public void testDummyResourceWithWrongEncodedFileName() {
+        final Resource dummyResource = new KieBuilderSetImpl.DummyResource("Dummy 100%");
+        assertEquals(dummyResource.getSourcePath(), "Dummy 100%");
     }
 
     private KieBuilderImpl kieBuilder( final KieServices ks,

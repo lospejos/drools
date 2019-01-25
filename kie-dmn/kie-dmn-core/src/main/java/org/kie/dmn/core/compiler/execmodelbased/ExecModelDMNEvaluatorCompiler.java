@@ -16,17 +16,20 @@
 
 package org.kie.dmn.core.compiler.execmodelbased;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import org.drools.compiler.commons.jci.compilers.CompilationResult;
-import org.drools.compiler.commons.jci.problems.CompilationProblem;
 import org.drools.compiler.compiler.io.memory.MemoryFileSystem;
 import org.drools.core.common.ProjectClassLoader;
 import org.kie.api.runtime.rule.DataSource;
+import org.kie.dmn.api.core.GeneratedSource;
 import org.kie.dmn.core.api.DMNExpressionEvaluator;
 import org.kie.dmn.core.ast.DMNBaseNode;
 import org.kie.dmn.core.compiler.DMNCompilerContext;
@@ -34,8 +37,10 @@ import org.kie.dmn.core.compiler.DMNCompilerImpl;
 import org.kie.dmn.core.compiler.DMNEvaluatorCompiler;
 import org.kie.dmn.core.compiler.DMNFEELHelper;
 import org.kie.dmn.core.impl.DMNModelImpl;
+import org.kie.dmn.model.api.DMNModelInstrumentedBase;
 import org.kie.dmn.model.api.DRGElement;
 import org.kie.dmn.model.api.DecisionTable;
+import org.kie.internal.jci.CompilationProblem;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,12 +50,23 @@ import static org.drools.modelcompiler.builder.JavaParserCompiler.getCompiler;
 public class ExecModelDMNEvaluatorCompiler extends DMNEvaluatorCompiler {
 
     static final Logger logger = LoggerFactory.getLogger(ExecModelDMNEvaluatorCompiler.class);
+    private GeneratorsEnum[] GENERATORS_WITHOUT_EXPRESSIONS = new GeneratorsEnum[] {
+            GeneratorsEnum.EVALUATOR,
+            GeneratorsEnum.UNIT,
+            GeneratorsEnum.EXEC_MODEL,
+            GeneratorsEnum.UNARY_TESTS
+    };
+
+    public ExecModelDMNEvaluatorCompiler(DMNCompilerImpl compiler) {
+        super(compiler);
+    }
 
     enum GeneratorsEnum {
         EVALUATOR("Evaluator", new EvaluatorSourceGenerator()),
         UNIT("DTUnit", new UnitSourceGenerator()),
         EXEC_MODEL("ExecModel", new ExecModelSourceGenerator()),
-        UNARY_TESTS("UnaryTests", new UnaryTestsSourceGenerator());
+        UNARY_TESTS("UnaryTests", new UnaryTestsSourceGenerator()),
+        FEEL_EXPRESSION("FeelExpression", new FeelExpressionSourceGenerator());
 
         String type;
         SourceGenerator sourceGenerator;
@@ -63,17 +79,37 @@ public class ExecModelDMNEvaluatorCompiler extends DMNEvaluatorCompiler {
 
     private ProjectClassLoader projectClassLoader = ProjectClassLoader.createProjectClassLoader();
 
-    public ExecModelDMNEvaluatorCompiler(DMNCompilerImpl compiler) {
-        super(compiler);
-    }
-
     @Override
     protected DMNExpressionEvaluator compileDecisionTable( DMNCompilerContext ctx, DMNModelImpl model, DMNBaseNode node, String dtName, DecisionTable dt ) {
-        String decisionName = dt.getParent() instanceof DRGElement ? dtName : ( dt.getId() != null ? dt.getId() :  "_" + UUID.randomUUID().toString() );
+        String decisionName = getDecisionTableName(dtName, dt);
         DTableModel dTableModel = new DTableModel(ctx.getFeelHelper(), model, dtName, decisionName, dt);
         AbstractModelEvaluator evaluator = generateEvaluator( ctx, dTableModel );
-        evaluator.initParameters(ctx.getFeelHelper(), ctx, dTableModel, node);
+        if(evaluator != null) {
+            evaluator.initParameters(ctx.getFeelHelper(), ctx, dTableModel, node);
+        }
         return evaluator;
+    }
+
+    protected static String getDecisionTableName(String dtName, DecisionTable dt) {
+        String decisionName;
+        if (dt.getParent() instanceof DRGElement) {
+            decisionName = dtName;
+        } else {
+            if (dt.getId() != null) {
+                decisionName = dt.getId();
+            } else {
+                DMNModelInstrumentedBase cursor = dt;
+                List<String> path = new ArrayList<>();
+                while (!(cursor instanceof DRGElement)) {
+                    int indexOf = cursor.getParent().getChildren().indexOf(cursor);
+                    path.add(String.valueOf(indexOf));
+                    cursor = cursor.getParent();
+                }
+                path.add(((DRGElement) cursor).getName());
+                decisionName = path.stream().sorted(Collections.reverseOrder()).collect(Collectors.joining("/"));
+            }
+        }
+        return decisionName;
     }
 
     public AbstractModelEvaluator generateEvaluator( DMNCompilerContext ctx, DTableModel dTableModel ) {
@@ -82,31 +118,52 @@ public class ExecModelDMNEvaluatorCompiler extends DMNEvaluatorCompiler {
 
         MemoryFileSystem srcMfs = new MemoryFileSystem();
         MemoryFileSystem trgMfs = new MemoryFileSystem();
-        String[] sources = new String[GeneratorsEnum.values().length];
+        String[] fileNames = new String[getGenerators().length];
+        List<GeneratedSource> generatedSources = new ArrayList<>();
 
-        for (int i = 0; i < sources.length; i++) {
-            GeneratorsEnum generator = GeneratorsEnum.values()[i];
-            String className = pkgName + "." + clasName + generator.type;
-            sources[i] = "src/main/java" + className.replace( '.', '/' ) + ".java";
+        generateSources(ctx, dTableModel, srcMfs, fileNames, generatedSources);
+
+        compileGeneratedClass(srcMfs, trgMfs, fileNames);
+        defineClassInClassLoader(trgMfs);
+        return createInvoker(pkgName, clasName);
+    }
+
+    protected void generateSources(DMNCompilerContext ctx, DTableModel dTableModel, MemoryFileSystem srcMfs, String[] fileNames, List<GeneratedSource> generatedSources) {
+        for (int i = 0; i < fileNames.length; i++) {
+            GeneratorsEnum generator = getGenerators()[i];
+            String className = dTableModel.getGeneratedClassName(generator);
+            String fileName = "src/main/java/" + className.replace('.', '/') + ".java";
             String javaSource = generator.sourceGenerator.generate(ctx, ctx.getFeelHelper(), dTableModel);
-            srcMfs.write( sources[i], javaSource.getBytes() );
+            fileNames[i] = fileName;
+            generatedSources.add(new GeneratedSource(fileName, javaSource));
+            srcMfs.write(fileNames[i], javaSource.getBytes());
         }
+    }
 
-        CompilationResult res = getCompiler().compile(sources, srcMfs, trgMfs, projectClassLoader);
+    protected GeneratorsEnum[] getGenerators() {
+        return GENERATORS_WITHOUT_EXPRESSIONS;
+    }
+
+    private AbstractModelEvaluator createInvoker(String pkgName, String clasName) {
+        try {
+            Class<?> evalClass = projectClassLoader.loadClass(pkgName + "." + clasName + "Evaluator");
+            return (AbstractModelEvaluator) evalClass.newInstance();
+        } catch (Exception e) {
+            throw new UnsupportedOperationException("Unknown decision table: " + clasName, e);
+        }
+    }
+
+    private void defineClassInClassLoader(MemoryFileSystem trgMfs) {
+        trgMfs.getFileNames().stream().forEach(f -> projectClassLoader.defineClass(f.replace('/', '.').substring(0, f.length() - ".class".length()), trgMfs.getBytes(f)));
+    }
+
+    private void compileGeneratedClass(MemoryFileSystem srcMfs, MemoryFileSystem trgMfs, String[] fileNames) {
+        CompilationResult res = getCompiler().compile(fileNames, srcMfs, trgMfs, projectClassLoader);
 
         CompilationProblem[] errors = res.getErrors();
         if (errors != null && errors.length > 0) {
-            Stream.of(errors).forEach( System.err::println );
+            Stream.of(errors).forEach(System.err::println);
             throw new RuntimeException();
-        }
-
-        trgMfs.getFileNames().stream().forEach( f -> projectClassLoader.defineClass( f.replace( '/', '.' ).substring( 0, f.length()-".class".length() ), trgMfs.getBytes( f ) ) );
-
-        try {
-            Class<?> evalClass = projectClassLoader.loadClass( pkgName + "." + clasName + "Evaluator" );
-            return (AbstractModelEvaluator) evalClass.newInstance();
-        } catch (Exception e) {
-            throw new UnsupportedOperationException( "Unknown decision table: " + clasName, e );
         }
     }
 
@@ -323,9 +380,16 @@ public class ExecModelDMNEvaluatorCompiler extends DMNEvaluatorCompiler {
                     if (testClass == null) {
                         testClass = className + "r" + i + "c" + j;
                         testClassesByInput.put(input, testClass);
-                        testsBuilder.append( "\n" );
                         instancesBuilder.append( "    private static final CompiledDTTest " + testClass + "_INSTANCE = new CompiledDTTest( new " + testClass + "() );\n" );
-                        testsBuilder.append( feel.getSourceForUnaryTest( pkgName, testClass, input, ctx, dTableModel.getColumns().get(j).getType() ) );
+
+                        String sourceCode = feel.generateUnaryTestsSource(
+                                input,
+                                ctx,
+                                dTableModel.getColumns().get(j).getType())
+                                .setName(testClass).toString();
+
+                        testsBuilder.append( "\n" );
+                        testsBuilder.append( sourceCode );
                         testsBuilder.append( "\n" );
                     }
                     testArrayBuilder.append( testClass ).append( "_INSTANCE" );

@@ -97,20 +97,24 @@ public class CompositeKnowledgeBuilderImpl implements CompositeKnowledgeBuilder 
     }
 
     public void build() {
+        build(true);
+    }
+
+    public void build(boolean buildRules) {
         buildException = null;
         kBuilder.registerBuildResources(getResources());
         buildResources();
-        buildPackages();
+        if(buildRules) {
+            kBuilder.buildPackages(buildPackageDescr());
+        } else {
+            kBuilder.buildPackagesWithoutRules(buildPackageDescr() );
+        }
         buildProcesses();
         buildOthers();
         resourcesByType.clear();
         if (buildException != null) {
             throw buildException;
         }
-    }
-
-    private void buildPackages() {
-        kBuilder.buildPackages( buildPackageDescr() );
     }
 
     private void buildProcesses() {
@@ -300,16 +304,16 @@ public class CompositeKnowledgeBuilderImpl implements CompositeKnowledgeBuilder 
         ResourceBuilder PKG_RESOURCE_BUILDER = ( kBuilder, resourceDescr ) -> kBuilder.addPackageFromInputStream(resourceDescr.resource );
 
         ResourceBuilder BPMN2_RESOURCE_BUILDER = ( kBuilder, resourceDescr ) -> {
-            BPMN2ProcessFactory.configurePackageBuilder( kBuilder );
-            kBuilder.addProcessFromXml( resourceDescr.resource );
+            kBuilder.addKnowledgeResource( resourceDescr.resource, ResourceType.BPMN2, resourceDescr.configuration );
         };
         
         ResourceBuilder CMMN_RESOURCE_BUILDER = ( kBuilder, resourceDescr ) -> {
-            CMMNCaseFactory.configurePackageBuilder( kBuilder );
-            kBuilder.addProcessFromXml( resourceDescr.resource );
+            kBuilder.addKnowledgeResource( resourceDescr.resource, ResourceType.CMMN, resourceDescr.configuration );
         };
 
-        ResourceBuilder DRF_RESOURCE_BUILDER = ( kBuilder, resourceDescr ) -> kBuilder.addProcessFromXml(resourceDescr.resource);
+        ResourceBuilder DRF_RESOURCE_BUILDER = ( kBuilder, resourceDescr ) -> {
+            kBuilder.addKnowledgeResource( resourceDescr.resource, ResourceType.DRF, resourceDescr.configuration );
+        };
     }
 
     @FunctionalInterface

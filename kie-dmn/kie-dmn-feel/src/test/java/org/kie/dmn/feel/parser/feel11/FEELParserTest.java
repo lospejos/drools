@@ -183,6 +183,7 @@ public class FEELParserTest {
         assertThat( stringLit, is( instanceOf( StringNode.class ) ) );
         assertThat( stringLit.getResultType(), is( BuiltInType.STRING ) );
         assertLocation( inputExpression, stringLit );
+        assertThat(stringLit.getText(), is(inputExpression));
     }
 
     @Test
@@ -669,17 +670,17 @@ public class FEELParserTest {
         assertThat( ctx.getEntries().size(), is( 3 ) );
 
         ContextEntryNode entry = ctx.getEntries().get( 0 );
-        assertThat( entry.getName(), is( instanceOf( NameDefNode.class ) ) );
-        NameDefNode name = (NameDefNode) entry.getName();
-        assertThat( name.getName(), is( notNullValue() ) );
-        assertThat( name.getName(), is("\"a string key\"") );
+        assertThat(entry.getName(), is(instanceOf(StringNode.class)));
+        StringNode nameNode = (StringNode) entry.getName();
+        assertThat(nameNode.getText(), is(notNullValue()));
+        assertThat(nameNode.getText(), is("\"a string key\"")); // Reference String literal test, BaseNode#getText() return the FEEL equivalent expression, in this case quoted.
         assertThat( entry.getValue(), is( instanceOf( NumberNode.class ) ) );
         assertThat( entry.getResultType(), is( BuiltInType.NUMBER ) );
         assertThat( entry.getValue().getText(), is("10") );
 
         entry = ctx.getEntries().get( 1 );
         assertThat( entry.getName(), is( instanceOf( NameDefNode.class ) ) );
-        name = (NameDefNode) entry.getName();
+        NameDefNode name = (NameDefNode) entry.getName();
         assertThat( name.getParts(), is( notNullValue() ) );
         assertThat( name.getParts().size(), is( 5 ) );
         assertThat( entry.getName().getText(), is("a non-string key") );
@@ -696,6 +697,50 @@ public class FEELParserTest {
         assertThat( entry.getValue(), is( instanceOf( RangeNode.class ) ) );
         assertThat( entry.getResultType(), is( BuiltInType.RANGE ) );
         assertThat( entry.getValue().getText(), is( "[10..50]" ) );
+    }
+
+    @Test
+    public void testVariableWithInKeyword() {
+        String inputExpression = "{ a variable with in keyword : 10, "
+                + " another variable : a variable with in keyword + 20, "
+                + " another in variable : an external in variable / 2 }";
+        BaseNode ctxbase = parse( inputExpression, mapOf(entry("an external in variable", BuiltInType.NUMBER)) );
+
+        assertThat( ctxbase, is( instanceOf( ContextNode.class ) ) );
+        assertThat( ctxbase.getText(), is( inputExpression ) );
+
+        ContextNode ctx = (ContextNode) ctxbase;
+        assertThat( ctx.getEntries().size(), is( 3 ) );
+
+        ContextEntryNode entry = ctx.getEntries().get( 0 );
+        assertThat( entry.getName(), is( instanceOf( NameDefNode.class ) ) );
+        NameDefNode name = (NameDefNode) entry.getName();
+        assertThat( name.getParts(), is( notNullValue() ) );
+        assertThat( name.getParts().size(), is( 5 ) );
+        assertThat( entry.getName().getText(), is("a variable with in keyword") );
+        assertThat( entry.getValue(), is( instanceOf( NumberNode.class ) ) );
+        assertThat( entry.getResultType(), is( BuiltInType.NUMBER ) );
+        assertThat( entry.getValue().getText(), is("10") );
+
+        entry = ctx.getEntries().get( 1 );
+        assertThat( entry.getName(), is( instanceOf( NameDefNode.class ) ) );
+        name = (NameDefNode) entry.getName();
+        assertThat( name.getParts(), is( notNullValue() ) );
+        assertThat( name.getParts().size(), is( 2 ) );
+        assertThat( entry.getName().getText(), is("another variable") );
+        assertThat( entry.getValue(), is( instanceOf( InfixOpNode.class ) ) );
+        assertThat( entry.getResultType(), is( BuiltInType.NUMBER ) );
+        assertThat( entry.getValue().getText(), is( "a variable with in keyword + 20" ) );
+
+        entry = ctx.getEntries().get( 2 );
+        assertThat( entry.getName(), is( instanceOf( NameDefNode.class ) ) );
+        name = (NameDefNode) entry.getName();
+        assertThat( name.getParts(), is( notNullValue() ) );
+        assertThat( name.getParts().size(), is( 3 ) );
+        assertThat( entry.getName().getText(), is("another in variable") );
+        assertThat( entry.getValue(), is( instanceOf( InfixOpNode.class ) ) );
+        assertThat( entry.getResultType(), is( BuiltInType.NUMBER ) );
+        assertThat( entry.getValue().getText(), is( "an external in variable / 2" ) );
     }
 
     @Test
@@ -1252,13 +1297,6 @@ public class FEELParserTest {
         String var = "5variable can't start with a number";
         assertThat( FEELParser.isVariableNameValid( var ), is( false ) );
         assertThat( FEELParser.checkVariableName( var ).get( 0 ).getMessage(), is( Msg.createMessage(Msg.INVALID_VARIABLE_NAME_START, "character", "5") ) );
-    }
-
-    @Test
-    public void testVariableNameCantContainKeywordIn() {
-        String var = "variable can't contain 'in' keyword";
-        assertThat( FEELParser.isVariableNameValid( var ), is( false ) );
-        assertThat( FEELParser.checkVariableName( var ).get( 0 ).getMessage(), is( Msg.createMessage(Msg.INVALID_VARIABLE_NAME, "keyword", "in") ) );
     }
 
     @Test
